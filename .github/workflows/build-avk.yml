@@ -11,7 +11,7 @@ jobs:
     env:
       ANDROID_HOME: ${{ github.workspace }}/android-sdk
       ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
-      GRADLE_OPTS: -Xmx4g -Dorg.gradle.daemon=false -Dkotlin.compiler.execution.strategy=in-process
+      GRADLE_OPTS: -Xmx4g -Dorg.gradle.daemon=false
     steps:
       - name: Checkout private app
         uses: actions/checkout@v4
@@ -62,7 +62,16 @@ jobs:
         working-directory: app-src
         run: |
           echo "sdk.dir=$ANDROID_HOME" > local.properties
-          printf '%s\n' 'org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=512m -Dfile.encoding=UTF-8' 'org.gradle.daemon=false' 'org.gradle.parallel=true' 'org.gradle.workers.max=2' > gradle.properties
+          # Do NOT overwrite gradle.properties — only ensure heap + AndroidX flags
+          if grep -q '^org.gradle.jvmargs=' gradle.properties; then
+            sed -i 's/^org.gradle.jvmargs=.*/org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=512m -Dfile.encoding=UTF-8/' gradle.properties
+          else
+            echo 'org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=512m -Dfile.encoding=UTF-8' >> gradle.properties
+          fi
+          grep -q 'android.useAndroidX=true' gradle.properties || echo 'android.useAndroidX=true' >> gradle.properties
+          grep -q 'android.enableJetifier=' gradle.properties || echo 'android.enableJetifier=true' >> gradle.properties
+          echo '--- gradle.properties ---'
+          cat gradle.properties
           ./gradlew :app:assembleRelease --no-daemon --stacktrace
       - name: Find APK
         id: apk
@@ -94,7 +103,7 @@ jobs:
           gh release create "$TAG" "$OUT" \
             --repo Reed3130/AVK-VPN-private \
             --title "AVK-VPN ${VER}" \
-            --notes "Release ${VER} via public avk-builder CI (unlimited minutes). Includes isCoreRunnable insecure VLESS filter and prior fixes."
+            --notes "Release ${VER} via public avk-builder CI. Includes isCoreRunnable insecure VLESS filter and prior fixes."
           gh api repos/Reed3130/AVK-VPN-private/releases --jq '.[].tag_name' | tail -n +3 | while read t; do
             gh release delete "$t" --repo Reed3130/AVK-VPN-private --yes 2>/dev/null || true
           done
