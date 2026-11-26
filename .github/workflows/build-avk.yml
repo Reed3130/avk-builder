@@ -58,6 +58,19 @@ jobs:
               -keyalg RSA -keysize 2048 -validity 10000 \
               -dname "CN=Android Debug,O=Android,C=US"
           fi
+      - name: Inject WHITE token for BuildConfig
+        env:
+          WHITE_GITHUB_TOKEN: ${{ secrets.AVK_BUILD_TOKEN }}
+        run: |
+          cd app-src
+          if [ -f local.properties ]; then
+            grep -v '^WHITE_GITHUB_TOKEN=' local.properties > local.properties.tmp || true
+            mv local.properties.tmp local.properties
+          fi
+          echo "sdk.dir=$ANDROID_HOME" >> local.properties
+          echo "WHITE_GITHUB_TOKEN=${WHITE_GITHUB_TOKEN}" >> local.properties
+          echo "local.properties keys:" && cut -d= -f1 local.properties
+
       - name: Assemble release
         working-directory: app-src
         run: |
