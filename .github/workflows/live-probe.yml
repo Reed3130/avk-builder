@@ -1,12 +1,25 @@
+# Live probe every 2 hours (public minutes). Default branch only.
 name: Live probe every 2h
 on:
   schedule:
-    - cron: '0 */2 * * *'
+    # every 2h at :05 and safety slot :35 of odd hours offset
+    - cron: '5 */2 * * *'
+    - cron: '35 1-23/2 * * *'
   workflow_dispatch:
+  # allow external/Grok kick
+  repository_dispatch:
+    types: [live-probe]
+
+concurrency:
+  group: live-probe
+  cancel-in-progress: false
+
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
+    permissions:
+      contents: write
     steps:
       - name: Checkout private app (scripts)
         uses: actions/checkout@v4
@@ -14,20 +27,25 @@ jobs:
           repository: Reed3130/AVK-VPN-private
           token: ${{ secrets.AVK_BUILD_TOKEN }}
           path: app-src
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
       - name: Run probe_live.py
         working-directory: app-src
         env:
           GH_TOKEN: ${{ secrets.AVK_BUILD_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.AVK_BUILD_TOKEN }}
         run: |
+          set -e
+          echo "probe start $(date -u +%Y-%m-%dT%H:%M:%SZ)"
           python3 scripts/live_probe/probe_live.py
           echo "--- status ---"
           cat scripts/live_probe/status.json || true
           wc -l live.txt || true
+
       - name: Commit live.txt to private if changed
         working-directory: app-src
         env:
