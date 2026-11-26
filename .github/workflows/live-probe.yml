@@ -1,0 +1,44 @@
+name: Live probe every 2h
+on:
+  schedule:
+    - cron: '0 */2 * * *'
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout private app (scripts)
+        uses: actions/checkout@v4
+        with:
+          repository: Reed3130/AVK-VPN-private
+          token: ${{ secrets.AVK_BUILD_TOKEN }}
+          path: app-src
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run probe_live.py
+        working-directory: app-src
+        env:
+          GH_TOKEN: ${{ secrets.AVK_BUILD_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.AVK_BUILD_TOKEN }}
+        run: |
+          python3 scripts/live_probe/probe_live.py
+          echo "--- status ---"
+          cat scripts/live_probe/status.json || true
+          wc -l live.txt || true
+      - name: Commit live.txt to private if changed
+        working-directory: app-src
+        env:
+          GH_TOKEN: ${{ secrets.AVK_BUILD_TOKEN }}
+        run: |
+          git config user.email "avk-builder@users.noreply.github.com"
+          git config user.name "AVK Builder"
+          git add live.txt scripts/live_probe/status.json || true
+          if git diff --staged --quiet; then
+            echo "no changes"
+          else
+            git commit -m "chore: live.txt probe (avk-builder 2h)"
+            git push "https://x-access-token:${GH_TOKEN}@github.com/Reed3130/AVK-VPN-private.git" HEAD:main
+          fi
