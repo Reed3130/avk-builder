@@ -8,6 +8,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      ANDROID_HOME: ${{ github.workspace }}/android-sdk
+      ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
+      GRADLE_OPTS: -Xmx4g -Dorg.gradle.daemon=false -Dkotlin.compiler.execution.strategy=in-process
     steps:
       - name: Checkout private app
         uses: actions/checkout@v4
@@ -20,28 +24,45 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - name: Setup Android SDK cmdline
+          cache: gradle
+      - name: Install Android commandlinetools
         run: |
-          mkdir -p "$HOME/android-sdk/cmdline-tools"
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
           cd /tmp
           curl -fsSL -o cmdtools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
-          unzip -q cmdtools.zip
-          rm -rf "$HOME/android-sdk/cmdline-tools/latest"
-          mv cmdline-tools "$HOME/android-sdk/cmdline-tools/latest"
-          echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
-          echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
-          echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
-          echo "$HOME/android-sdk/platform-tools" >> $GITHUB_PATH
-      - name: Accept licenses and install packages
+          unzip -q cmdtools.zip -d "$ANDROID_HOME/cmdline-tools"
+          mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+      - name: Install SDK packages
         run: |
-          yes | sdkmanager --sdk_root=$HOME/android-sdk --licenses >/tmp/sdk-lic.txt || true
-          sdkmanager --sdk_root=$HOME/android-sdk "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+          yes | sdkmanager --sdk_root="$ANDROID_HOME" --licenses >/dev/null || true
+          sdkmanager --sdk_root="$ANDROID_HOME" \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+      - name: Verify native cores
+        working-directory: app-src
+        run: |
+          ls -lh libv2ray/libv2ray.aar hev-socks5-tunnel/hev-socks5-tunnel.aar
+          test -f libv2ray/libv2ray.aar
+          test -f hev-socks5-tunnel/hev-socks5-tunnel.aar
       - name: Grant gradlew
         run: chmod +x app-src/gradlew
+      - name: Ensure debug keystore
+        run: |
+          mkdir -p "$HOME/.android"
+          if [ ! -f "$HOME/.android/debug.keystore" ]; then
+            keytool -genkeypair -v -keystore "$HOME/.android/debug.keystore" \
+              -storepass android -keypass android -alias androiddebugkey \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
       - name: Assemble release
         working-directory: app-src
         run: |
-          echo "sdk.dir=$HOME/android-sdk" > local.properties
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          printf '%s\n' 'org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=512m -Dfile.encoding=UTF-8' 'org.gradle.daemon=false' 'org.gradle.parallel=true' 'org.gradle.workers.max=2' > gradle.properties
           ./gradlew :app:assembleRelease --no-daemon --stacktrace
       - name: Find APK
         id: apk
@@ -67,17 +88,13 @@ jobs:
           APK="${{ steps.apk.outputs.path }}"
           OUT="AVK-VPN-${VER}.apk"
           cp "$APK" "$OUT"
-          # install gh if needed
-          which gh || (curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null && sudo apt-get update -qq && sudo apt-get install -y -qq gh)
+          sudo apt-get update -qq && sudo apt-get install -y -qq gh >/dev/null 2>&1 || true
           gh release delete "$TAG" --repo Reed3130/AVK-VPN-private --yes 2>/dev/null || true
           git push "https://x-access-token:${GH_TOKEN}@github.com/Reed3130/AVK-VPN-private.git" ":refs/tags/${TAG}" 2>/dev/null || true
           gh release create "$TAG" "$OUT" \
             --repo Reed3130/AVK-VPN-private \
             --title "AVK-VPN ${VER}" \
-            --notes "Release ${VER} via public avk-builder CI. isCoreRunnable rejects insecure public VLESS; prior stop/notification/white fixes included."
-          # keep only 2 releases
-          mapfile -t tags < <(gh release list --repo Reed3130/AVK-VPN-private --limit 20 | awk '{print $3}' | sed 's/^v/v/;s/"//g')
-          # gh release list columns vary; use JSON
+            --notes "Release ${VER} via public avk-builder CI (unlimited minutes). Includes isCoreRunnable insecure VLESS filter and prior fixes."
           gh api repos/Reed3130/AVK-VPN-private/releases --jq '.[].tag_name' | tail -n +3 | while read t; do
             gh release delete "$t" --repo Reed3130/AVK-VPN-private --yes 2>/dev/null || true
           done
