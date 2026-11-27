@@ -1,0 +1,26 @@
+# Offset kick every 2h (odd hours) → workflow_dispatch main probe
+name: Live probe kick (offset)
+on:
+  schedule:
+    - cron: '20 1-23/2 * * *'
+    - cron: '40 */2 * * *'
+  workflow_dispatch:
+
+jobs:
+  kick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Dispatch live-probe
+        env:
+          GH_TOKEN: ${{ secrets.AVK_BUILD_TOKEN }}
+        run: |
+          set -e
+          echo "kick $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          curl -fsS -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/Reed3130/avk-builder/actions/workflows/live-probe.yml/dispatches" \
+            -d '{"ref":"main"}'
+          echo "dispatched"

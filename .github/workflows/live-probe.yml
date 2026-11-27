@@ -1,14 +1,13 @@
-# Live probe every 2 hours (public minutes). Default branch only.
+# Live probe ~every 2h. Multiple cron slots (GitHub may skip some).
 name: Live probe every 2h
 on:
   schedule:
-    # every 2h at :05 and safety slot :35 of odd hours offset
     - cron: '5 */2 * * *'
-    - cron: '35 1-23/2 * * *'
+    - cron: '35 */2 * * *'
+    - cron: '50 1-23/2 * * *'
   workflow_dispatch:
-  # allow external/Grok kick
   repository_dispatch:
-    types: [live-probe]
+    types: [live-probe, probe]
 
 concurrency:
   group: live-probe
@@ -40,7 +39,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.AVK_BUILD_TOKEN }}
         run: |
           set -e
-          echo "probe start $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "probe start $(date -u +%Y-%m-%dT%H:%M:%SZ) event=${{ github.event_name }}"
           python3 scripts/live_probe/probe_live.py
           echo "--- status ---"
           cat scripts/live_probe/status.json || true
