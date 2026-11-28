@@ -1,10 +1,8 @@
-# Target: probe ~every 2h. Hourly cron attempts + throttle (skip if ran <100m ago).
 name: Live probe every 2h
 on:
   schedule:
-    # every hour two slots — GH often skips some; throttle keeps ~2h real cadence
-    - cron: '5 * * * *'
-    - cron: '35 * * * *'
+    - cron: "5 * * * *"
+    - cron: "35 * * * *"
   workflow_dispatch:
   repository_dispatch:
     types: [live-probe, probe]
@@ -20,68 +18,52 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Checkout private app (scripts)
+      - name: Checkout private app
         uses: actions/checkout@v4
         with:
           repository: Reed3130/AVK-VPN-private
           token: ${{ secrets.AVK_BUILD_TOKEN }}
           path: app-src
 
-      - name: Throttle ~2h for schedule only
+      - name: Throttle schedule to ~2h
+        id: throttle
         if: github.event_name == 'schedule'
         working-directory: app-src
         run: |
-          set -e
-          STATUS=scripts/live_probe/status.json
-          if [ -f "$STATUS" ]; then
-            # last run unix if present
-            python3 - <<'PY'
-import json, time, sys
-from pathlib import Path
-p = Path("scripts/live_probe/status.json")
-try:
-    d = json.loads(p.read_text())
-except Exception:
-    sys.exit(0)
-# support several keys
-ts = d.get("ts") or d.get("updated") or d.get("time") or d.get("last_run")
-if ts is None:
-    sys.exit(0)
-if isinstance(ts, str):
-    # try parse ISO
-    from datetime import datetime
-    try:
-        t = datetime.fromisoformat(ts.replace("Z","+00:00")).timestamp()
-    except Exception:
-        sys.exit(0)
-else:
-    t = float(ts)
-    if t > 1e12:  # ms
-        t /= 1000.0
-age_min = (time.time() - t) / 60.0
-print(f"last probe age_min={age_min:.1f}")
-if age_min < 100:
-    print("throttle: skip schedule (need ~2h)")
-    # exit 0 with skip marker for next step
-    Path("/tmp/probe_skip").write_text("1")
-else:
-    Path("/tmp/probe_skip").write_text("0")
-PY
+          python3 -c '
+          import json, time
+          from pathlib import Path
+          p = Path("scripts/live_probe/status.json")
+          skip = False
+          if p.is_file():
+              try:
+                  d = json.loads(p.read_text())
+                  t = d.get("ts") or 0
+                  if t > 1e12:
+                      t = t / 1000.0
+                  age = (time.time() - float(t)) / 60.0
+                  print(f"age_min={age:.1f}")
+                  if age < 100:
+                      skip = True
+              except Exception as e:
+                  print("status parse", e)
+          print("skip" if skip else "run")
+          Path("/tmp/probe_skip").write_text("1" if skip else "0")
+          '
+          if [ "$(cat /tmp/probe_skip)" = "1" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
           else
-            echo 0 > /tmp/probe_skip
-          fi
-          if [ "$(cat /tmp/probe_skip 2>/dev/null || echo 0)" = "1" ]; then
-            echo "SKIP_PROBE=1" >> "$GITHUB_ENV"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Setup Python
-        if: env.SKIP_PROBE != '1'
+        if: github.event_name != 'schedule' || steps.throttle.outputs.skip != 'true'
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
-      - name: Run probe_live.py
-        if: env.SKIP_PROBE != '1'
+      - name: Run probe
+        if: github.event_name != 'schedule' || steps.throttle.outputs.skip != 'true'
         working-directory: app-src
         env:
           GH_TOKEN: ${{ secrets.AVK_BUILD_TOKEN }}
@@ -90,12 +72,11 @@ PY
           set -e
           echo "probe start $(date -u +%Y-%m-%dT%H:%M:%SZ) event=${{ github.event_name }}"
           python3 scripts/live_probe/probe_live.py
-          echo "--- status ---"
           cat scripts/live_probe/status.json || true
           wc -l live.txt || true
 
-      - name: Commit live.txt to private if changed
-        if: env.SKIP_PROBE != '1'
+      - name: Commit live.txt
+        if: github.event_name != 'schedule' || steps.throttle.outputs.skip != 'true'
         working-directory: app-src
         env:
           GH_TOKEN: ${{ secrets.AVK_BUILD_TOKEN }}
@@ -109,7 +90,3 @@ PY
             git commit -m "chore: live.txt probe (avk-builder 2h)"
             git push "https://x-access-token:${GH_TOKEN}@github.com/Reed3130/AVK-VPN-private.git" HEAD:main
           fi
-
-      - name: Schedule note
-        if: env.SKIP_PROBE == '1'
-        run: echo "Skipped by 2h throttle (schedule)"
